@@ -9,7 +9,7 @@ class DatabaseConfig:
     def create_engine_connection(self):
         try:
             params = urllib.parse.quote_plus(
-                f"DRIVER={{ODBC Driver 13 for SQL Server}};SERVER={self.server};DATABASE={self.database_name};Trusted_Connection=yes;"
+                f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={self.server};DATABASE={self.database_name};Trusted_Connection=yes;"
             )
             engine = create_engine(f"mssql+pyodbc:///?odbc_connect={params}")
             return engine

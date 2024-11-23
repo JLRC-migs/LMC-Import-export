@@ -22,13 +22,13 @@ class ExcelToSQLAppUI:
         export_button = tk.Button(self.root, text="Export DB to Excel", bg = '#3fb7f0',command=self.export_db_to_excel)
         export_button.pack(pady=20)
 
-        # Delete Table Button
-        delete_table_button = tk.Button(self.root, text="Delete Table", bg = '#f51a1a', command=self.controller.delete_table)
-        delete_table_button.pack(pady=20)
+        # # Delete Table Button
+        # delete_table_button = tk.Button(self.root, text="Delete Table", bg = '#f51a1a', command=self.controller.delete_table)
+        # delete_table_button.pack(pady=20)
         
-        # Delete Data Button
-        delete_data_button = tk.Button(self.root, text="Delete Data", bg = '#ff7f12',command=self.controller.delete_data)
-        delete_data_button.pack(pady=20)
+        # # Delete Data Button
+        # delete_data_button = tk.Button(self.root, text="Delete Data", bg = '#ff7f12',command=self.controller.delete_data)
+        # delete_data_button.pack(pady=20)
 
     def import_excel_to_db(self):
         self.controller.import_excel_to_sql()

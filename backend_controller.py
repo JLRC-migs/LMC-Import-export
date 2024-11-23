@@ -3,92 +3,133 @@ from imports import *
 
 class BackendController:
     def __init__(self):
-        self.db_config = None
-        self.engine = None
-    def connect_to_database(self):
-        if not self.engine:
-            server = 'DESKTOP-EQR4UHR\\SQLEXPRESS01'
-            
-            while True:  # Loop until a valid database name is entered
-                database_name = simpledialog.askstring("Database Selection", "Enter the database name you want to access:")
+        self.server = 'MIGS-LAPTOP\\SQLEXPRESS'
+        self.database_name = 'SampleDB'  # Automatically set to SampleDB
+        self.db_config = DatabaseConfig(self.server, self.database_name)
+        self.engine = self.db_config.create_engine_connection()
 
-                if not database_name:
-                    messagebox.showwarning("Database Name Missing", "No database name provided.")
-                    return None
-                
-                # Initialize temporary DatabaseConfig to check if database exists
-                temp_db_config = DatabaseConfig(server, 'master')
-                temp_engine = temp_db_config.create_engine_connection()
-                
-                if temp_engine:
-                    with temp_engine.connect() as conn:
-                        # Query system databases to see if user-provided database exists
-                        db_exists = conn.execute(
-                            text(f"SELECT name FROM sys.databases WHERE name = :name"), {'name': database_name}
-                        ).fetchone()
-
-                    temp_engine.dispose()
-
-                    if db_exists:
-                        # If the database exists, initialize the actual DatabaseConfig and engine
-                        self.db_config = DatabaseConfig(server, database_name)
-                        self.engine = self.db_config.create_engine_connection()
-                        return self.engine
-                    else:
-                        messagebox.showwarning("Invalid Database", f"No database named '{database_name}' found. Please try again.")
-                else:
-                    messagebox.showerror("Connection Error", "Could not connect to the server.")
-                    return None
-      
     def check_table_exists(self, engine, table_name):
         inspector = inspect(engine)
         return inspector.has_table(table_name)
-    
+
+    def get_table_list(self, engine):
+        """
+        Fetches a list of available tables in the connected database.
+        """
+        inspector = inspect(engine)
+        return inspector.get_table_names()
+
+    def select_table(self, engine):
+        """
+        Presents the user with a dropdown or input dialog to select a table from the database.
+        """
+        table_list = self.get_table_list(engine)
+        if not table_list:
+            messagebox.showinfo("No Tables", "No tables found in the database.")
+            return None
+        table_name = simpledialog.askstring(
+            "Select Table",
+            f"Available Tables:\n{', '.join(table_list)}\nEnter your choice:",
+        )
+        if table_name not in table_list:
+            messagebox.showerror("Invalid Selection", f"'{table_name}' is not a valid table name.")
+            return None
+        return table_name
+
     def import_excel_to_sql(self):
-        engine = self.connect_to_database()
+        if not self.engine:
+            messagebox.showerror("Database Error", "Failed to connect to the database.")
+            return
+
+        # Prompt for Excel file
         file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
         if not file_path:
             return
 
-        table_name = simpledialog.askstring("Table Name", "Enter the table name:")
+        # Prompt for table name from available tables
+        table_name = self.select_table(self.engine)
         if not table_name:
-            messagebox.showwarning("Table Name", "No table name provided.")
             return
 
         try:
+            # Load Excel data
             df = pd.read_excel(file_path)
-            engine = self.db_config.create_engine_connection()
-            if not engine:
-                return
+            staging_table_name = f"{table_name}_staging"
 
-            table_exists = self.check_table_exists(engine, table_name)
-            
-            if table_exists:
-                existing_df = pd.read_sql(f"SELECT TOP 0 * FROM {table_name}", engine)
-                if not all(column in existing_df.columns for column in df.columns):
-                    messagebox.showerror("Schema Mismatch", "The structure of the Excel file does not match the existing table.")
+            with self.engine.begin() as connection:
+                try:
+                    # Load data into staging table
+                    df.to_sql(staging_table_name, self.engine, if_exists="replace", index=False)
+                    messagebox.showinfo("Success", f"Staging table '{staging_table_name}' created.")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to create staging table:\n{e}")
                     return
 
-                action = messagebox.askquestion("Table Exists", 
-                                                f"Table '{table_name}' already exists. Do you want to overwrite the data (Yes) or append (No)?",
-                                                icon='question')
-                if action == 'yes':
-                    df.to_sql(table_name, engine, if_exists='replace', index=False)
-                    messagebox.showinfo("Success", "Data imported and table overwritten successfully.")
-                elif action == 'no':
-                    df.to_sql(table_name, engine, if_exists='append', index=False)
-                    messagebox.showinfo("Success", "Data appended successfully.")
-            else:
-                create_table = messagebox.askyesno("Table Not Found", 
-                                                   f"Table '{table_name}' does not exist. Do you want to create a new table?")
-                if create_table:
-                    df.to_sql(table_name, engine, if_exists='replace', index=False)
-                    messagebox.showinfo("Success", f"Table '{table_name}' created and data imported successfully.")
+                # Check if the main table exists
+                table_exists = self.check_table_exists(self.engine, table_name)
+
+                # Prompt user for action
+                action = simpledialog.askstring(
+                    "Choose Action",
+                    "Choose an option:\n1: Overwrite\n2: Append\n3: Merge by 'keyno'"
+                )
+
+                if action == "1":
+                    # Overwrite: Drop and rename staging table
+                    try:
+                        if table_exists:
+                            connection.execute(text(f"DROP TABLE {table_name}"))
+                        connection.execute(text(f"EXEC sp_rename '{staging_table_name}', '{table_name}'"))
+                        messagebox.showinfo("Success", "Table overwritten successfully.")
+                    except Exception as e:
+                        messagebox.showerror("Error", f"Failed to overwrite table:\n{e}")
+                        return
+
+                elif action == "2":
+                    # Append: Insert all rows from staging table into the main table
+                    try:
+                        if table_exists:
+                            insert_query = text(f"INSERT INTO {table_name} SELECT * FROM {staging_table_name}")
+                            connection.execute(insert_query)
+                        else:
+                            connection.execute(text(f"EXEC sp_rename '{staging_table_name}', '{table_name}'"))
+                        messagebox.showinfo("Success", "Data appended successfully.")
+                    except Exception as e:
+                        messagebox.showerror("Error", f"Failed to append data:\n{e}")
+                        return
+
+                elif action == "3":
+                    # Merge: Remove duplicates based on primary key 'keyno' and append
+                    try:
+                        primary_key_column = "keyno"
+                        if primary_key_column not in df.columns:
+                            messagebox.showerror("Error", f"Primary key '{primary_key_column}' not found in the data.")
+                            return
+
+                        merge_query = text(f"""
+                            DELETE FROM {table_name}
+                            WHERE {primary_key_column} IN (SELECT {primary_key_column} FROM {staging_table_name});
+                            INSERT INTO {table_name} SELECT * FROM {staging_table_name};
+                        """)
+                        connection.execute(merge_query)
+                        messagebox.showinfo("Success", "Data merged successfully.")
+                    except Exception as e:
+                        messagebox.showerror("Error", f"Failed to merge data:\n{e}")
+                        return
                 else:
                     messagebox.showinfo("Cancelled", "Operation cancelled by user.")
+                    return
+
+                # Drop the staging table after processing
+                try:
+                    connection.execute(text(f"DROP TABLE {staging_table_name}"))
+                    messagebox.showinfo("Cleanup", "Staging table dropped successfully.")
+                except Exception as e:
+                    messagebox.showerror("Cleanup Error", f"Failed to drop staging table:\n{e}")
 
         except Exception as e:
             messagebox.showerror("Import Error", f"Failed to import data:\n{e}")
+
 
     def export_db_to_excel(self):
         engine = self.connect_to_database()
